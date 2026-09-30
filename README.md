@@ -18,9 +18,3 @@ python -m pip install --no-deps -e .
 ```
 
 此安装命令只安装 Python SDK，不会连接机械臂或使能电机。使用硬件前检查串口、机械臂型号和控制参数；不要让本 SDK 与 ROS 驱动同时占用同一控制接口。
-
-## 来源与命名
-
-此公开仓库由 [Seeed-Projects/reBotArm_control_py](https://github.com/Seeed-Projects/reBotArm_control_py) fork，包含 Zekeep 使用的配置和代码修改。上游仓库未声明明确的开源许可证；本仓库保留 fork 关系与上游历史，不添加新的上游代码许可。请查看上游仓库及其维护者说明，再决定如何复制、再发布或用于其他项目。
-
-Python 模块名仍为 `reBotArm_control_py`，以保持 Zekeeparm 工作区现有导入路径兼容。
