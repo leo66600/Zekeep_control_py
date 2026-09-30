@@ -113,58 +113,7 @@ def load_cfg(hw_yaml: str | None = None) -> dict:
         "rate": float(data.get("rate", 500.0)),
         "groups": data.get("groups", {}),
         "joints": joints,
-        "arm_control_mode": str(data.get("arm_control_mode", "posvel")),
     }
-
-
-def load_gravity_compensation_config(
-    profile: str,
-    hw_yaml: str | None = None,
-) -> dict:
-    """Load one gravity-compensation profile from the active hardware YAML.
-
-    Profile values override the legacy/default keys directly under
-    ``gravity_compensation``. Hardware YAML files without ``profiles`` remain
-    compatible and return their legacy/default gravity-compensation mapping.
-    """
-    hw_path = _resolve_hw_cfg_path(hw_yaml)
-    with open(hw_path, "r") as f:
-        data = yaml.safe_load(f) or {}
-
-    gravity_cfg = data.get("gravity_compensation", {}) or {}
-    if not isinstance(gravity_cfg, dict):
-        raise TypeError("gravity_compensation must be a mapping")
-
-    profiles = gravity_cfg.get("profiles", {}) or {}
-    if not isinstance(profiles, dict):
-        raise TypeError("gravity_compensation.profiles must be a mapping")
-
-    if not profiles:
-        return {
-            key: value
-            for key, value in gravity_cfg.items()
-            if key != "profiles"
-        }
-    if profile not in profiles:
-        available = ", ".join(sorted(str(name) for name in profiles))
-        raise KeyError(
-            f"Unknown gravity-compensation profile {profile!r}; "
-            f"available: {available}"
-        )
-
-    profile_cfg = profiles[profile]
-    if not isinstance(profile_cfg, dict):
-        raise TypeError(
-            f"gravity_compensation.profiles.{profile} must be a mapping"
-        )
-
-    merged = {
-        key: value
-        for key, value in gravity_cfg.items()
-        if key != "profiles"
-    }
-    merged.update(profile_cfg)
-    return merged
 
 
 # --------------------------------------------------------------------------
@@ -295,12 +244,15 @@ class JointGroup:
         by_vendor: Dict[str, List[str]] = {}
         for jc in self._jcfgs:
             by_vendor.setdefault(jc.vendor, []).append(jc.name)
+        errors: List[str] = []
         for vendor in by_vendor:
             try:
                 self._cm[vendor].disable_all()
             except CallError as e:
-                print(f"[{self.name}/disable] {e}")
+                errors.append(f"{vendor}: {e}")
             time.sleep(0.05)
+        if errors:
+            raise CallError(f"[{self.name}/disable] {'; '.join(errors)}")
 
     # ── 模式切换 ────────────────────────────────────────────────────────
 
@@ -442,10 +394,13 @@ class JointGroup:
 
     # ── 状态读取 ───────────────────────────────────────────────────────
 
-    def _poll_feedback(self) -> None:
-        """仅处理 CAN 接收队列中的反馈帧（快速，无总线发送）。"""
+    def _request_feedback(self) -> None:
         seen: set[str] = set()
         for jc in self._jcfgs:
+            try:
+                self._mm[jc.name].request_feedback()
+            except Exception:
+                pass
             if jc.vendor not in seen:
                 seen.add(jc.vendor)
                 try:
@@ -453,42 +408,16 @@ class JointGroup:
                 except Exception:
                     pass
 
-    def _request_feedback(self) -> None:
-        """发送显式反馈请求帧 + 处理接收队列（慢，有总线发送）。"""
-        for jc in self._jcfgs:
-            try:
-                self._mm[jc.name].request_feedback()
-            except Exception:
-                pass
-        self._poll_feedback()
-
     def get_positions(self, request_feedback: bool = True) -> np.ndarray:
-        # 始终发送显式请求帧 + 处理接收队列
-        # motorbridge 内部会针对 RS/DM 分别处理
-        self._request_feedback()
-        
-        out: list[float] = []
-        for jc in self._jcfgs:
-            m = self._mm[jc.name]
-            st = m.get_state()
-            if st is not None:
-                out.append(st.pos)
-            else:
-                # 缓存为空时回退到 SDO 读取（安全兜底）
-                if jc.vendor == "robstride":
-                    try:
-                        out.append(float(m.robstride_get_param_f32(0x7019)))
-                        continue
-                    except CallError:
-                        pass
-                out.append(0.0)
-        return np.array(out, dtype=np.float64)
+        if request_feedback:
+            self._request_feedback()
+        return np.array([
+            self._mm[jc.name].get_state().pos
+            if self._mm[jc.name].get_state() is not None else 0.0
+            for jc in self._jcfgs
+        ], dtype=np.float64)
 
     def get_velocities(self, request_feedback: bool = True) -> np.ndarray:
-        # NOTE (RobStride): the cached state has the same staleness problem as
-        # get_positions, and the mechVel param (0x701A) was measured NOT to be
-        # rad/s on RS firmware (inconsistent scale/sign vs dq/dt, 2026-07-17).
-        # For a live velocity on RobStride, finite-difference get_positions().
         if request_feedback:
             self._request_feedback()
         return np.array([
@@ -535,7 +464,6 @@ class RebotArm:
         self._rate: float = cfg["rate"]
         self._all_joints: List[JointCfg] = cfg["joints"]
         self._groups_def: dict = cfg["groups"]
-        self._arm_control_mode: str = cfg.get("arm_control_mode", "posvel")
 
         self._ctrl_map: Dict[str, Controller] = {}
         self._motor_map: Dict[str, any] = {}
@@ -553,11 +481,17 @@ class RebotArm:
         """连接总线、注册电机。模式切换需在 connect 后调用。"""
         if self._connected:
             return
-        self._setup_motors()
+        try:
+            self._setup_motors()
+        except Exception:
+            # No motor output is enabled by connect. Close partial transports.
+            for controller in self._ctrl_map.values():
+                controller.close()
+            raise
         self._connected = True
 
     def _make_controller(self, vendor: str) -> Controller:
-        if self._channel.startswith("/dev/tty"):
+        if str(Path(self._channel).resolve()).startswith("/dev/tty"):
             return Controller.from_dm_serial(self._channel, 921600)
         return Controller(self._channel)
 
@@ -623,11 +557,6 @@ class RebotArm:
         return not isinstance(self._groups.get("gripper", None), NoOpGroup)
 
     @property
-    def arm_control_mode(self) -> str:
-        """从硬件配置文件读取的默认 arm 控制模式（"mit" 或 "posvel"）。"""
-        return self._arm_control_mode
-
-    @property
     def hardware_yaml(self) -> str:
         return self._hw_yaml
 
@@ -660,8 +589,14 @@ class RebotArm:
             g.enable()
 
     def disable_all(self) -> None:
+        errors: List[str] = []
         for g in self._groups.values():
-            g.disable()
+            try:
+                g.disable()
+            except Exception as exc:
+                errors.append(str(exc))
+        if errors:
+            raise CallError("disable_all failed: " + "; ".join(errors))
 
     # ── 零点 ────────────────────────────────────────────────────────────
 

@@ -20,18 +20,11 @@
     rebotarm.disconnect()
 """
 
-from .rebotarm import (
-    RebotArm,
-    JointGroup,
-    JointCfg,
-    load_cfg,
-    load_gravity_compensation_config,
-)
+from .rebotarm import RebotArm, JointGroup, JointCfg, load_cfg
 
 __all__ = [
     "RebotArm",
     "JointGroup",
     "JointCfg",
     "load_cfg",
-    "load_gravity_compensation_config",
 ]

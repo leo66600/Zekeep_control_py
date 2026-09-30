@@ -37,7 +37,7 @@ def _hw_config() -> dict:
     return _hw_cfg_cache
 
 
-def _resolve_urdf(urdf_path: str | None = None) -> Tuple[str, List[str]]:
+def _resolve_urdf(urdf_path: str | None = None) -> Tuple[str, str]:
     if urdf_path is None:
         urdf_path = _hw_config().get("urdf_path", "")
 
@@ -47,13 +47,10 @@ def _resolve_urdf(urdf_path: str | None = None) -> Tuple[str, List[str]]:
     if not Path(urdf_path).is_absolute():
         urdf_path = str(_project_root / urdf_path)
 
-    # URDFs in this repo use two mesh-path conventions:
-    #   "../meshes/..." resolved from the URDF's own directory, and
-    #   "meshes/..."    resolved from the package root (the URDF dir's parent).
-    # Hand Pinocchio both so either convention resolves without per-URDF tweaks.
-    urdf_dir = Path(urdf_path).resolve().parent
-    package_dirs = [str(urdf_dir), str(urdf_dir.parent)]
-    return urdf_path, package_dirs
+    pkg_dir = str(Path(urdf_path).resolve().parent)
+    if pkg_dir.endswith("/urdf") or pkg_dir.endswith("\\urdf"):
+        pkg_dir = str(Path(pkg_dir).parent)
+    return urdf_path, pkg_dir
 
 
 def load_robot_model(urdf_path: str | None = None) -> pin.Model:
@@ -84,7 +81,15 @@ def get_joint_limits(model: pin.Model) -> List[Tuple[float, float]]:
 
 
 def get_end_effector_frame_id(model: pin.Model) -> int:
-    return model.getFrameId(get_end_effector_frame())
+    frame_name = get_end_effector_frame()
+    frame_id = int(model.getFrameId(frame_name))
+    if frame_id >= model.nframes:
+        available = ", ".join(frame.name for frame in model.frames)
+        raise ValueError(
+            f"End-effector frame {frame_name!r} is not present in the URDF. "
+            f"Available frames: {available}"
+        )
+    return frame_id
 
 
 def get_all_frame_names(model: pin.Model) -> List[str]:

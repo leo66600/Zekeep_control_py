@@ -10,11 +10,8 @@
 # Each group has its own control mode and is sent independently
 # Kinematics config (URDF path, end-effector frame)
 
-urdf_path: "urdf/DM/urdf/ReBot_Arm_DM.urdf"
-end_effector_frame: "end_link"
-# arm 默认控制模式（仅影响 example/7 和 8 中 RebotArmEndPose 的默认值，显式传入 arm_control_mode 参数时覆盖）
-# Default arm control mode (only affects RebotArmEndPose examples 7 & 8; overridden by explicit arm_control_mode argument)
-arm_control_mode: "posvel"
+urdf_path: "../../src/rebot_grasp/config/sixaxis.urdf"
+end_effector_frame: "official_tcp"
 
 channel: /dev/ttyACM0
 rate: 500
@@ -32,14 +29,14 @@ joints:
     model: "4340P"
     vendor: "damiao"
     MIT:
-      kp: 120.0
-      kd: 8.0
+      kp: 160.0
+      kd: 5.0
     POS_VEL:
       vel_kp: 0.0125
       vel_ki: 0.004
-      pos_kp: 150.0
+      pos_kp: 180.0
       pos_ki: 0.5
-      vlim: 5.0
+      vlim: 0.50
 
   - name: joint2
     motor_id: 0x02
@@ -47,14 +44,14 @@ joints:
     model: "4340P"
     vendor: "damiao"
     MIT:
-      kp: 120.0
-      kd: 8.0
+      kp: 200.0
+      kd: 5.0
     POS_VEL:
       vel_kp: 0.0125
       vel_ki: 0.004
-      pos_kp: 150.0
+      pos_kp: 180.0
       pos_ki: 0.5
-      vlim: 5.0
+      vlim: 0.50
 
   - name: joint3
     motor_id: 0x03
@@ -62,14 +59,14 @@ joints:
     model: "4340P"
     vendor: "damiao"
     MIT:
-      kp: 120.0
-      kd: 8.0
+      kp: 200.0
+      kd: 5.0
     POS_VEL:
       vel_kp: 0.0125
       vel_ki: 0.004
-      pos_kp: 150.0
+      pos_kp: 180.0
       pos_ki: 0.5
-      vlim: 5.0
+      vlim: 0.50
 
   - name: joint4
     motor_id: 0x04
@@ -77,14 +74,14 @@ joints:
     model: "4310"
     vendor: "damiao"
     MIT:
-      kp: 18.0
+      kp: 54.0
       kd: 2.0
     POS_VEL:
       vel_kp: 0.0008
       vel_ki: 0.002
-      pos_kp: 70.0
+      pos_kp: 80.0
       pos_ki: 1.0
-      vlim: 3.0
+      vlim: 0.50
 
   - name: joint5
     motor_id: 0x05
@@ -92,14 +89,14 @@ joints:
     model: "4310"
     vendor: "damiao"
     MIT:
-      kp: 18.0
+      kp: 54.0
       kd: 2.0
     POS_VEL:
       vel_kp: 0.0008
       vel_ki: 0.002
-      pos_kp: 60.0
+      pos_kp: 80.0
       pos_ki: 1.0
-      vlim: 3.0
+      vlim: 0.50
 
   - name: joint6
     motor_id: 0x06
@@ -107,14 +104,14 @@ joints:
     model: "4310"
     vendor: "damiao"
     MIT:
-      kp: 18.0
+      kp: 54.0
       kd: 2.0
     POS_VEL:
       vel_kp: 0.0008
       vel_ki: 0.002
-      pos_kp: 60.0
+      pos_kp: 80.0
       pos_ki: 1.0
-      vlim: 3.0
+      vlim: 0.50
 
   - name: gripper
     motor_id: 0x07
@@ -130,13 +127,3 @@ joints:
       pos_kp: 50.0
       pos_ki: 1.0
       vlim: 3.0
-
-gravity_compensation:
-  # Compliant gains (MIT position-loop stiffness used during gravity comp).
-  kp: 1.5
-  kd: 1.0
-  # Per-joint gravity torque scaling factor to correct model-vs-hardware bias.
-  tau_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-  # Fade from stiff hold gains to compliant gains without a sudden
-  # loss of stiffness at gravity-compensation startup (seconds).
-  transition_duration: 0.5

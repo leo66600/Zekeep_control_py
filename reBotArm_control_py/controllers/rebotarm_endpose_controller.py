@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -80,11 +81,11 @@ class RebotArmEndPose:
         rebotarm: RebotArm,
         dt: float = 0.01,
         profile: TrajProfile = TrajProfile.MIN_JERK,
-        arm_control_mode: str | None = None,
+        arm_control_mode: str = "posvel",
         use_gravity_ff: bool = True,
+        urdf_path: str | Path | None = None,
+        end_effector_frame: str | None = None,
     ) -> None:
-        if arm_control_mode is None:
-            arm_control_mode = rebotarm.arm_control_mode
         if arm_control_mode not in ("mit", "posvel"):
             raise ValueError("arm_control_mode must be 'mit' or 'posvel'")
         self._arm_control_mode = arm_control_mode
@@ -99,8 +100,16 @@ class RebotArmEndPose:
 
         self._n = self._arm_group.num_joints
         self._dt = dt
-        self._model = load_robot_model()
-        self._end_frame_id = get_end_effector_frame_id(self._model)
+        self._model = load_robot_model(None if urdf_path is None else str(urdf_path))
+        if end_effector_frame is None:
+            self._end_frame_id = get_end_effector_frame_id(self._model)
+        else:
+            self._end_frame_id = int(self._model.getFrameId(end_effector_frame))
+            if self._end_frame_id >= self._model.nframes:
+                raise ValueError(
+                    f"End-effector frame {end_effector_frame!r} is not present "
+                    f"in {urdf_path}"
+                )
         self._data = self._model.createData()
 
         self._traj_params = TrajPlanParams(dt=dt, profile=profile)
@@ -309,12 +318,14 @@ class RebotArmEndPose:
             return False
 
         pts = [pt.q[: self._n].copy() for pt in joint_traj]
+        duration = self._posvel_duration(pts, q_start[: self._n], duration)
 
         self._stop_send.set()
         if self._send_thread is not None:
             self._send_thread.join(timeout=5.0)
 
         self._traj = pts
+        self._traj_duration = duration
         self._moving = True
         self._stop_send.clear()
         self._send_thread = threading.Thread(
@@ -333,8 +344,8 @@ class RebotArmEndPose:
                     q_now = self._arm_group.get_positions(request_feedback=False)
                     q_now = pad_q_for_model(self._model, q_now, self._n)
                     tau_ff = compute_generalized_gravity(self._model, q_now, self._data)[: self._n]
-                    # tau_ff[1] *= 1.55  # joint2 额外补偿
-                    # tau_ff[2] *= 1.55  # joint3 额外补偿
+                    tau_ff[1] *= 1.55  # joint2 额外补偿
+                    tau_ff[2] *= 1.55  # joint3 额外补偿
                     
                 self._arm_group.send_mit(
                     self._q_target,
@@ -357,8 +368,29 @@ class RebotArmEndPose:
                 kd=self._gripper_group._mit_kd,
             )
 
-
     # ── 轨迹发送线程 ──────────────────────────────────────────────────────
+
+    def _posvel_duration(self, points, start, duration: float) -> float:
+        """Stretch uniformly sampled joint commands to respect POS_VEL limits."""
+        if not np.isfinite(duration) or duration <= 0:
+            raise ValueError("trajectory duration must be finite and positive")
+        if self._arm_control_mode != "posvel":
+            return duration
+        limits = np.asarray(
+            self._vlim_override if self._vlim_override is not None
+            else self._arm_group._pv_vlim, dtype=np.float64,
+        )
+        if np.any(~np.isfinite(limits)) or np.any(limits <= 0):
+            raise ValueError("POS_VEL speed limits must be finite and positive")
+        deltas = np.diff(np.vstack([start, *points]), axis=0)
+        if not np.all(np.isfinite(deltas)):
+            raise ValueError("trajectory contains non-finite joint positions")
+        # Allow 10% tracking headroom without raising motor speed limits.
+        minimum = len(points) * float(np.max(np.abs(deltas) / limits)) * 1.1
+        actual = max(float(duration), minimum)
+        if actual > duration:
+            print(f"[POS_VEL] trajectory duration {duration:.2f}s -> {actual:.2f}s (speed limits)")
+        return actual
 
     def _send_loop(self, duration: float) -> None:
         n = len(self._traj)
